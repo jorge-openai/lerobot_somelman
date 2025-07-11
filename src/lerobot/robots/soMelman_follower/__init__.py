@@ -1,0 +1,2 @@
+from .config_soMelman_follower import SOMelmanFollowerConfig
+from .soMelman_follower import SOMelmanFollower
