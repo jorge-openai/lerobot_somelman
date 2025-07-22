@@ -155,7 +155,7 @@ class OpenCVCamera(Camera):
         # blocking in multi-threaded applications, especially during data collection.
         cv2.setNumThreads(1)
 
-        self.videocapture = cv2.VideoCapture(self.index_or_path, self.backend)
+        self.videocapture = cv2.VideoCapture(self.index_or_path)#, self.backend)
 
         if not self.videocapture.isOpened():
             self.videocapture.release()
@@ -416,7 +416,7 @@ class OpenCVCamera(Camera):
         self.thread = None
         self.stop_event = None
 
-    def async_read(self, timeout_ms: float = 200) -> np.ndarray:
+    def async_read(self, timeout_ms: float = 1000) -> np.ndarray:
         """
         Reads the latest available frame asynchronously.
 
