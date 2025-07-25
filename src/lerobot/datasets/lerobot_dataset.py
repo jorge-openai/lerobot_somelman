@@ -219,6 +219,33 @@ class LeRobotDatasetMetadata:
         """Max number of episodes per chunk."""
         return self.info["chunks_size"]
 
+    @property
+    def image_path(self) -> str:
+        """
+        Formattable string that points to *individual* frame files.
+
+        Expected placeholder names:
+           {image_key}        visual modality name
+           {episode_index:06d}
+           {frame_index:06d}
+        Example (default): "images/{image_key}/episode_{episode_index:06d}/frame_{frame_index:06d}.png"
+        """
+        return self.info["image_path"]          # present in info.json
+
+    # 2️⃣  helper to build an actual path on disk
+    def get_image_file_path(
+        self,
+        episode_index: int,
+        image_key: str,
+        frame_index: int,
+    ) -> Path:
+        fpath = self.image_path.format(
+            image_key=image_key,
+            episode_index=episode_index,
+            frame_index=frame_index,
+        )
+        return Path(fpath)
+
     def get_task_index(self, task: str) -> int | None:
         """
         Given a task in natural language, returns its task_index if the task already exists in the dataset,
@@ -334,7 +361,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self,
         repo_id: str,
         root: str | Path | None = None,
-        episodes: list[int] | None = None,
+        episodes: list[int] | None = None,  # <--- I can pass the list of episodes I want to use
         image_transforms: Callable | None = None,
         delta_timestamps: dict[list[float]] | None = None,
         tolerance_s: float = 1e-4,
@@ -699,7 +726,48 @@ class LeRobotDataset(torch.utils.data.Dataset):
     def __len__(self):
         return self.num_frames
 
-    def __getitem__(self, idx) -> dict:
+
+    def __getitem__(self, idx):
+
+        if len(self.meta.video_keys) > 0:
+            return self.__original_getitem__(idx)
+        
+        item = self.hf_dataset[idx]
+        ep_idx = item["episode_index"].item()
+        f_idx = item["frame_index"].item()       # stored in parquet
+
+
+        if self.delta_indices is not None:
+            query_indices, padding = self._get_query_indices(idx, ep_idx)
+            query_result = self._query_hf_dataset(query_indices)
+            item = {**item, **padding, **query_result}
+
+
+        # no more _query_videos / decode_video_frames
+        frames = {}
+        for cam_key in self.meta.image_keys:     # ["observation.images.gripper", ...]
+            img_path = self.root / self.meta.get_image_file_path(
+                episode_index=ep_idx,
+                image_key=cam_key,
+                frame_index=f_idx,
+            )
+            
+
+            frame_np = np.array(PIL.Image.open(img_path).convert("RGB"), copy=True)
+            frame_t  = torch.from_numpy(frame_np)     # 3×H×W uint8
+            frame_t  = frame_t.permute(2, 0, 1).float().div_(255.0)  # float32 in [0,1]
+            frames[cam_key] = frame_t
+
+        item.update(frames)
+
+        task_idx = item["task_index"].item()
+        item["task"] = self.meta.tasks[task_idx]
+
+        return item
+
+
+    def __original_getitem__(self, idx) -> dict:
+        
         item = self.hf_dataset[idx]
         ep_idx = item["episode_index"].item()
 
@@ -874,10 +942,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
         parquet_files = list(self.root.rglob("*.parquet"))
         assert len(parquet_files) == self.num_episodes
 
+        # Don't remove images
         # delete images
-        img_dir = self.root / "images"
-        if img_dir.is_dir():
-            shutil.rmtree(self.root / "images")
+        #img_dir = self.root / "images"
+        #if img_dir.is_dir():
+        #    shutil.rmtree(self.root / "images")
 
         if not episode_data:  # Reset the buffer
             self.episode_buffer = self.create_episode_buffer()
@@ -1003,6 +1072,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         obj.episode_data_index = None
         obj.video_backend = video_backend if video_backend is not None else get_safe_default_codec()
         return obj
+    
 
 
 class MultiLeRobotDataset(torch.utils.data.Dataset):
@@ -1130,6 +1200,11 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
             if isinstance(feats, VideoFrame):
                 video_frame_keys.append(key)
         return video_frame_keys
+    
+    @property
+    def image_path(self) -> str:
+        """Formattable string for individual frame files."""
+        return self._datasets[0].meta.info.get("image_path")
 
     @property
     def num_frames(self) -> int:
@@ -1154,6 +1229,8 @@ class MultiLeRobotDataset(torch.utils.data.Dataset):
         return self.num_frames
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+
+        
         if idx >= len(self):
             raise IndexError(f"Index {idx} out of bounds.")
         # Determine which dataset to get an item from based on the index.
