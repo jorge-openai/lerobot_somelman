@@ -364,7 +364,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         episodes: list[int] | None = None,  # <--- I can pass the list of episodes I want to use
         image_transforms: Callable | None = None,
         delta_timestamps: dict[list[float]] | None = None,
-        tolerance_s: float = 1e-4,
+        tolerance_s: float = 10,#,1e-4,
         revision: str | None = None,
         force_cache_sync: bool = False,
         download_videos: bool = True,
